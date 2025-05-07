@@ -1,0 +1,65 @@
+import cv2
+import numpy as np
+import math
+
+# --- Paramètres de la voiture ---
+CAR_LENGTH = 20  # en pixels
+CAR_WIDTH = 10   # en pixels
+WHEELBASE = 18   # distance entre les essieux (pixels)
+
+# --- Position initiale ---
+x = 200  # position du centre de l’essieu arrière (x)
+y = 300  # position du centre de l’essieu arrière (y)
+theta = 0  # angle en radians (0 = vers la droite)
+
+# --- Charger la map ---
+map_img = cv2.imread('mapLittle.png')
+
+def draw_car(img, x, y, theta):
+    """Dessine la voiture comme un rectangle orienté."""
+    # Calcul du centre géométrique (milieu entre essieux)
+    center_x = x + (CAR_LENGTH / 2) * math.cos(theta)
+    center_y = y + (CAR_LENGTH / 2) * math.sin(theta)
+
+    rect = ((center_x, center_y), (CAR_LENGTH, CAR_WIDTH), -np.degrees(theta))
+    box = cv2.boxPoints(rect)
+    box = np.int32(box)
+
+    car_img = img.copy()
+    cv2.drawContours(car_img, [box], 0, (0, 0, 255), -1)  # rouge plein
+    return car_img
+
+def move_car(x, y, theta, v, delta, dt=1.0):
+    """Met à jour la position de la voiture selon le modèle bicycle."""
+    x += v * math.cos(theta) * dt
+    y -= v * math.sin(theta) * dt
+    theta += (v / WHEELBASE) * math.tan(delta) * dt
+
+  
+
+    return x, y, theta
+
+# --- Boucle principale ---
+while True:
+    display_img = draw_car(map_img, x, y, theta)
+    cv2.imshow('Car Parking Simulation', display_img)
+
+    key = cv2.waitKey(100)
+    if key == 27:  # ÉCHAP pour quitter
+        break
+    elif key == ord('z'):  # avancer
+        x, y, theta = move_car(x, y, theta, v=5, delta=0)
+    elif key == ord('s'):  # reculer
+        x, y, theta = move_car(x, y, theta, v=-5, delta=0)
+    elif key == ord('a'):  # avancer vers la gauche
+        x, y, theta = move_car(x, y, theta, v=5, delta=np.radians(20))
+    elif key == ord('e'):  # avancer vers la droite
+        x, y, theta = move_car(x, y, theta, v=5, delta=np.radians(-20))
+    elif key == ord('q'):  # reculer vers la gauche
+        x, y, theta = move_car(x, y, theta, v=-5, delta=np.radians(20))
+    elif key == ord('d'):  # reculer vers la droite
+        x, y, theta = move_car(x, y, theta, v=-5, delta=np.radians(-20))
+    
+    print(x,y)
+
+cv2.destroyAllWindows()
