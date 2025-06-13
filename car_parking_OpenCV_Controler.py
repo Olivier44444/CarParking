@@ -1,49 +1,18 @@
 import cv2
 import numpy as np
-import math
-import time
 import heapq
 from dubins_path_planner import dubins_path_planner
+import matplotlib.pyplot as plt
 
 
 """
-                A faire
+#################################################################   To run the script   #################################################################
 
-<•> Vérifier comment fonctionnent generate_obstacle_distance_map() et check_circular_collision_distance_2_circles()
-    <•> Comprendre ce qu'est dist_map, dist_transform
-        h, w = dist_map.shape # pas besoin de mettre le [:2]
-<•> Améliorer la fonction de coût du A*, il faut prendre en compte theta
-<•> Regarder si on ne peut pas définir qu'une seule fois les centre_x, radius ...
+Activate the environment car_env :
+>   source car_env/bin/activate
 
-< > Vérifier si les angles sont en radian ou en degré
-
-<•> Transformer le mode contrôle en fonction    
-
-< > Review fonctions : 
-    <•> draw_car
-    <•> move_car
-    < > generate_obstacle_distance_map
-    <•> collision_detector
- 
-
-<•> Graph
-    <•> Node3D
-        <•> Qu'est-ce que __lt__ ?
-    <•> heuristic_dubins()
-        <•> Revoir le calcul du rayon_minimal
-    <•> cost_motion()
-        <•> Revoir le calcul de g
-    <•> create_successors()
-    <•> is_goal_reached()
-    <•> reconstruct_path()
-    <•> hybrid_a_star()
-
-<•> Affichage : 
-    <•> En fait il faudrait fusionner les fonction draw_car et obstacle, ou faire une fonction pour obstacle_detection et 2 autres fonctions pour draw circles
-        et car
-
-> Etude des paramètres 
-    < > Regarder l'influence de rayon_min (il semble que plus rayon_min est petit moins il y a de mouvements perturbateurs)
+Installer les librairies : 
+>   pip install opencv-python numpy
 
 """
 
@@ -51,51 +20,77 @@ from dubins_path_planner import dubins_path_planner
 """ Choix du mode : """ 
 # True : Mode de contrôle de la voiture avec les touches du clavier
 # False : Mode car parking avec graphs
-Control = True
+Control = False
+Show_Circle = True # Pour afficher les cercles de détection d'obstacles
+Show_Trace = True # Afficher les positions précédentes de la voiture
+
+
 
 ########################################## Paramètres ##########################################
 
-Car_length = 20  # en pixels
-Car_width = 10   # en pixels
+Obstacles = [[0,0,0], [0,127,0]] # liste de pixels obstacles
+
+Car_length = 20  # (pixels)
+Car_width = 10   # (pixels)
 L_essieux = 18   # distance entre les essieux (pixels)
 
-phi = 30 # angle de braquage 
+phi_deg = 30 # angle de braquage (degrés)
+phi = np.radians(phi_deg) # (radians)
 abs_v = 5.0 # vitesse de la voiture en valeur absolue
 dt = 1.0 # pas de temps
 
-angular_precision = 5*math.pi/180
-position_precision = 1.0
+angular_precision_deg = 5 # (deg)
+angular_precision = np.radians(angular_precision_deg) # (radians)
+position_precision = 1.0 # (pixels)
 
 
-rayon_min = L_essieux / np.tan(phi*np.pi/180)/2
+rayon_min = L_essieux / np.tan(phi)/2 # Rayon minimal pour calculer le chemin de Dubins
+
+# Pénalités pour calculer le coût
 reverse_penalty = 5.0
 turning_penalty = 2.0
 turning_penalty_condition = 0.01
 
-delay = 300
+delay = 100 # frames (Graph Mode)
 
-""" Exemples de points de départ et d'arrivé (Graph Mode) """
-# Exemple 1 : Trajet classique
-start = 150, 200, 0
-goal = 250, 150, np.pi/2
+main_color = (220, 0, 0) # Couleur de la voiture
+
+""" Exemples de points de départ et d'arrivé (Graph Mode) 
+x_s, y_s, theta_s : coordonnées du start
+x_g, y_g, theta_g : coordonnées du goal
+
+Attention : theta_s et theta_g en degrés
+"""
+
+
+# Exemple 1 : Trajets classiques
+
+#x_s, y_s, theta_s = 150, 200, 0
+#x_g, y_g, theta_g = 250, 150, 90
 
 # Exemple 2
-#start = 150, 300, np.pi/2
-#goal = 250, 200, 0
+#x_s, y_s, theta_s = 150, 300, 90
+#x_g, y_g, theta_g = 250, 200, 0
 
 # Exemple 3 : Demi tour
-#start = 180, 140, -np.pi/2
-#goal = 250, 150, np.pi/2
+#x_s, y_s, theta_s = 180, 140, -90
+#x_g, y_g, theta_g = 250, 150, 90
 
 # Exemple 4 : Créneau
-#start = 225, 170, 0
-#goal = 180, 150, 0
+x_s, y_s, theta_s = 225, 170, 0
+x_g, y_g, theta_g = 180, 150, 0
+
+# Exemple 5 : Long trajet
+#x_s, y_s, theta_s = 300, 210, 0
+#x_g, y_g, theta_g = 450, 250, -90
+
+start = x_s, y_s, np.radians(theta_s)
+goal = x_g, y_g, np.radians(theta_g)
 
 """ Position initiale de la voiture (Contrôle mode) """
-x = 180  
-y = 170   
-theta_deg = 0  # angle en degrés (0 = vers la droite)
-theta = theta_deg*2*np.pi/360 # angle en radian
+x, y, theta_deg = 300, 210, 0 # angle en degrés (0 = vers la droite)
+
+theta = np.radians(theta_deg) # (radians)
 
 
 # Chargement de la map 
@@ -105,32 +100,73 @@ map_shape = [map_height, map_width]
 
 
 
+
+
+########################################## Preprocessing de l'image ##########################################
+
+
+def show_colors():
+    img_rgb = cv2.cvtColor(map_img, cv2.COLOR_BGR2RGB)
+
+    pixels = img_rgb.reshape(-1, 3) 
+    unique_colors, counts = np.unique(pixels, axis=0, return_counts=True)
+
+    fig_height = max(5, len(unique_colors) * 0.6)
+    fig, (ax_img, ax_legend) = plt.subplots(1, 2, figsize=(10, fig_height))
+
+    ax_img.imshow(img_rgb)
+    ax_img.set_title("Carte (image d'origine)")
+    ax_img.axis('off')
+    
+    square_size = 1
+    for i, color in enumerate(unique_colors):
+        rgb = tuple(int(c) for c in color)
+        ax_legend.add_patch(
+            plt.Rectangle((0, i), square_size, square_size, color=np.array(rgb)/255.0)
+        )
+        ax_legend.text(square_size + 0.2, i + 0.5, str(rgb), va='center', fontsize=10)
+
+    ax_legend.set_xlim(0, 4)
+    ax_legend.set_ylim(0, len(unique_colors))
+    ax_legend.invert_yaxis() 
+    ax_legend.axis('off')
+    ax_legend.set_title("Légende des couleurs")
+
+    plt.tight_layout()
+    plt.show()
+
+#show_colors()
+
+
+
+
 ########################################## Fonctions Principales ##########################################
 
-def draw_car(img, x, y, theta):
+
+def draw_car(img, x, y, theta, color=main_color):
     """
     Dessine la voiture comme un rectangle orienté autour de l’essieu arrière.
 
     Input :
-    • img       : image de la map
-    • x         : abscisse de la voiture
-    • y         : ordonnée de la voiture
-    • theta     : orientation de la voiture (theta = 0 → voiture vers la droite)
-
+    • img : image de la map
+    • x : abscisse de la voiture
+    • y : ordonnée de la voiture
+    • theta : orientation de la voiture (theta = 0 → voiture vers la droite)
+    • color : couleur de la voiture
     Output : 
-    • car_img   : image avec la voiture
+    • car_img : image avec la voiture
     """
 
     # Calcul du centre de la voiture par rapport à l’essieu arrière, le rectangle étant dessiné à partir du centre géométrique de la voiture
-    center_x = x + (Car_length/4) * math.cos(theta)
-    center_y = y - (Car_width/4) * math.sin(theta)
+    center_x = x + (Car_length/4) * np.cos(theta)
+    center_y = y - (Car_width/4) * np.sin(theta)
 
     rect = ((center_x, center_y), (Car_length, Car_width), -np.degrees(theta))
     box = cv2.boxPoints(rect)
     box = np.int32(box)
 
     car_img = img.copy()
-    cv2.drawContours(car_img, [box], 0, (0, 0, 255), -1)  # rouge
+    cv2.drawContours(car_img, [box], 0, color, -1) 
 
     # Afficher l’essieu arrière (centre de rotation) en vert
     cv2.circle(car_img, (int(x), int(y)), 1, (0, 255, 0), -1)
@@ -139,39 +175,62 @@ def draw_car(img, x, y, theta):
 
 
 
+
 def move_car(x, y, theta, v, delta, dt=1.0):
     """
     Met à jour la position de la voiture en utilisant les équations basées sur le modèle de mouvement
     Input:
-    • x     : abscisse de la voiture
-    • y     : ordonnée de la voiture
-    • theta : orientation de la voiture (theta = 0 → voiture vers la droite)
-    • v     : vitesse de la voiture
+    • x : abscisse de la voiture
+    • y : ordonnée de la voiture
+    • theta : orientation de la voiture (theta = 0 → voiture vers la droite) (radian)
+    • v : vitesse de la voiture
     • delta : angle de braquage de la voiture
-    • dt    : petit pas de temps
-
+    • dt : petit pas de temps
     Output:
     Nouvelles positions : 
     • x
     • y
     • theta
     """
-    x += v * math.cos(theta) * dt
-    y -= v * math.sin(theta) * dt
-    theta += (v / L_essieux) * math.tan(delta) * dt
+    x += v * np.cos(theta) * dt
+    y -= v * np.sin(theta) * dt
+    theta += (v / L_essieux) * np.tan(delta) * dt
 
     return x, y, theta
-
 
 
 def generate_obstacle_distance_map(img):
     """Crée une carte de distances aux obstacles à partir d'une image.
     Input:
-    • img               : 
-
+    • img : map affichée avec OpenCV (BGR)
     Output:
-    
-    • dist_transform    : 
+    • dist_transform : carte des distances (array)
+    """
+
+    obstacle_mask = np.zeros(img.shape[:2], dtype=bool)
+
+    for color in Obstacles: # Comparaison avec les pixels de la map
+        match = np.all(img == color, axis=-1)
+        obstacle_mask = np.logical_or(obstacle_mask, match)
+
+    obstacle_mask = obstacle_mask.astype(np.uint8) * 255
+
+    if len(obstacle_mask.shape) == 3: # Monocanal
+        obstacle_mask = cv2.cvtColor(obstacle_mask, cv2.COLOR_BGR2GRAY)
+
+    free_space = cv2.bitwise_not(obstacle_mask) # Les obstacles doivent être en noir
+
+    dist_transform = cv2.distanceTransform(free_space, cv2.DIST_L2, 5) # distanceTransform permet alors de calculer la distance de chaque pixel au pixel noir leplus proche
+
+    return dist_transform
+
+
+def generate_obstacle_distance_map(img):
+    """Crée une carte de distances aux obstacles à partir d'une image.
+    Input:
+    • img : map affichée avec OpenCV
+    Output:
+    • dist_transform : carte des distances (array)
     """
 
     # Détection des obstacles (noir ou vert)
@@ -187,18 +246,26 @@ def generate_obstacle_distance_map(img):
     # Inverser les obstacles : 0 pour obstacles, 255 pour espace libre
     free_space = cv2.bitwise_not(obstacle_mask)
 
-    # Calcul de la distance aux obstacles
+    # Calcul de la distance aux obstacles   
     dist_transform = cv2.distanceTransform(free_space, cv2.DIST_L2, 5)
 
     return dist_transform
 
 
-def collision_detector(img, dist_map, x, y, theta):
+def collision_detector(img, dist_map, x, y, theta, circle_condition):
+    """Détecte une collision basée sur la distance à l'obstacle à trois points (grand cercle + deux petits cercles).
+    Input:
+    • img : image avec la voiture (issue de draw_car)
+    • dist_map : carte des distances (np.array)
+    • x : (pixels)
+    • y : (pixels)
+    • theta : (rad)
+    • circle_condition : (Show_Circle) booléen qui active ou non l'affichage des cercles de détection d'obstacles
+    Output:
+    • Collision : True / False s'il y a une collision (bool)
+    • img_out : image avec la voiture et les cercles de détection de collision
     """
-    Détecte une collision basée sur la distance à l'obstacle à trois points (grand cercle + deux petits cercles).
-    """
-    #print(dist_map.shape[:2])
-    #exit()
+
 
     img_out = img.copy()
 
@@ -206,22 +273,22 @@ def collision_detector(img, dist_map, x, y, theta):
     Collision = False
 
     # Définition des rayons des cercles
-    radius = int(math.hypot(Car_length, Car_width) / 2) + 2 # Grand cercle
+    radius = int(np.hypot(Car_length, Car_width) / 2) + 2 # Grand cercle
     radius_small = radius // 2 # Petits cercles
 
     # Définition des centres des cercles
 
     # Grand cercle
-    center_x = int(x + (Car_length / 4) * math.cos(theta))
-    center_y = int(y - (Car_width / 4) * math.sin(theta))
+    center_x = int(x + (Car_length / 4) * np.cos(theta))
+    center_y = int(y - (Car_width / 4) * np.sin(theta))
 
     # Petit cerlce 1
-    center_x_1 = int(center_x - radius_small * math.cos(theta))
-    center_y_1 = int(center_y + radius_small * math.sin(theta))
+    center_x_1 = int(center_x - radius_small * np.cos(theta))
+    center_y_1 = int(center_y + radius_small * np.sin(theta))
 
     # Petit cerlce 2
-    center_x_2 = int(center_x + radius_small * math.cos(theta))
-    center_y_2 = int(center_y - radius_small * math.sin(theta))
+    center_x_2 = int(center_x + radius_small * np.cos(theta))
+    center_y_2 = int(center_y - radius_small * np.sin(theta))
 
     h, w = dist_map.shape
 
@@ -241,30 +308,30 @@ def collision_detector(img, dist_map, x, y, theta):
         if distance_at(center_x_1, center_y_1) < radius_small or distance_at(center_x_2, center_y_2) < radius_small:
             Collision = True
 
-
     # Créaction des cercles
+    if circle_condition == True:
 
-    # On génère le grand cercle en bleu
-    cv2.circle(img_out, (center_x, center_y), radius, (255, 0, 0), 1)  # Bleu
-    
-    # Vérifier collision suspectée
-    
-    if Collision == True:
-        #print("❌ Collision détectée")
+        # On génère le grand cercle en bleu
+        cv2.circle(img_out, (center_x, center_y), radius, (255, 0, 0), 1)  # Bleu
+        
+        # Vérifier collision suspectée
+        
+        if Collision == True:
+            #print("Collision détectée")
 
-        # Si une collision est détectée, le grand cercle passe en rouge et le petits cercles aussi
-        cv2.circle(img_out, (center_x, center_y), radius, (0, 0, 255), 1)            # Rouge
-        cv2.circle(img_out, (center_x_1, center_y_1), radius_small, (0, 0, 255), 1)  # Rouge
-        cv2.circle(img_out, (center_x_2, center_y_2), radius_small, (0, 0, 255), 1)  # Rouge
-    
-    elif Suspected_collision == True:
-        #print("⚠️ Collision suspectée")
-        # Si une collision est suspectée, c'est simplement le grand cercle qui passe en rouge, les petits cercles sont en orange 
+            # Si une collision est détectée, le grand cercle passe en rouge et le petits cercles aussi
+            cv2.circle(img_out, (center_x, center_y), radius, (0, 0, 255), 1)            # Rouge
+            cv2.circle(img_out, (center_x_1, center_y_1), radius_small, (0, 0, 255), 1)  # Rouge
+            cv2.circle(img_out, (center_x_2, center_y_2), radius_small, (0, 0, 255), 1)  # Rouge
+        
+        elif Suspected_collision == True:
+            #print("Collision suspectée")
+            # Si une collision est suspectée, c'est simplement le grand cercle qui passe en rouge, les petits cercles sont en orange 
 
-        cv2.circle(img_out, (center_x, center_y), radius, (0, 0, 255), 1)              # Rouge
-        cv2.circle(img_out, (center_x_1, center_y_1), radius_small, (0, 165, 255), 1)  # Orange
-        cv2.circle(img_out, (center_x_2, center_y_2), radius_small, (0, 165, 255), 1)  # Orange
-    
+            cv2.circle(img_out, (center_x, center_y), radius, (0, 0, 255), 1)              # Rouge
+            cv2.circle(img_out, (center_x_1, center_y_1), radius_small, (0, 165, 255), 1)  # Orange
+            cv2.circle(img_out, (center_x_2, center_y_2), radius_small, (0, 165, 255), 1)  # Orange
+        
     
     return Collision, img_out
 
@@ -276,11 +343,19 @@ def collision_detector(img, dist_map, x, y, theta):
 
 
 def Control_Mode(x, y, theta): 
+    """Permet de contrôler la voiture.
+    Input:
+    • x
+    • y
+    • theta
+    Output:
+    • Affiche la map avec la voiture tant qu'on n'appuie pas sur Echap
+    """
     while True:
 
         # Bloc d'affichage
-        display_img = draw_car(map_img, x, y, theta)
-        Collision, img_out = collision_detector(display_img, dist_map, x, y, theta)
+        display_img = draw_car(map_img, x, y, theta, main_color)
+        Collision, img_out = collision_detector(display_img, dist_map, x, y, theta, Show_Circle)
         cv2.imshow('Car Parking Simulation', img_out)
 
         # Lecture de touche
@@ -292,10 +367,10 @@ def Control_Mode(x, y, theta):
         move_map = {
             ord('z'): (abs_v, 0),
             ord('s'): (-abs_v, 0),
-            ord('a'): (abs_v, np.radians(phi)),
-            ord('e'): (abs_v, np.radians(-phi)),
-            ord('q'): (-abs_v, np.radians(phi)),
-            ord('d'): (-abs_v, np.radians(-phi)),
+            ord('a'): (abs_v, phi),
+            ord('e'): (abs_v, -phi),
+            ord('q'): (-abs_v, phi),
+            ord('d'): (-abs_v, -phi),
         }
         if key in move_map:
             v, delta = move_map[key]
@@ -324,25 +399,44 @@ class Node3D:
         return self.f() < other.f()
 
     def to_key(self):
-        return (int(self.x), int(self.y), int(self.theta * 180 / math.pi) % 360)
+        return (int(self.x), int(self.y), int(self.theta * 180 / np.pi) % 360)
 
-
-
-def heuristic_dubins(current, goal):
-    qs = [current.x, current.y, current.theta]
-    qe = [goal.x, goal.y, goal.theta]
-    turning_radius = rayon_min
-
-    try:
-        px, py, pyaw, path_type, arc_len = dubins_path_planner(qs, qe, turning_radius)
-        return sum(arc_len)  # longueur totale de l’arc Dubins
-    except:
-        return float('inf')  # au cas où le chemin serait invalide
     
 
+def heuristic_dubins(current, goal, turning_radius):
+    """Calcule l'heuristic h.
+    Input:
+    • current : noeud courant
+    • goal : noeud 
+    • turning_radius : rayon utilisé dans le calcul des chemins de Dubins
+    Output:
+    • h : longueur du chemin de Dubins 
+    """
+
+    qs = [current.x, current.y, current.theta]
+    qe = [goal.x, goal.y, goal.theta]
+    
+    result = dubins_path_planner(qs, qe, turning_radius)
+
+    if result is None:
+        return float('inf')  # Aucun chemin valide trouvé
+
+    px, py, pyaw, path_type, arc_len = result
+    return sum(arc_len)  # Longueur totale du chemin Dubins
+
+
+
 def cost_motion(parent, child):
+    """Calcule le coût g.
+    Input:
+    • parent : noeud parent
+    • child : noeud enfant
+    Output:
+    • g : coût du noeud de départ jusqu'au noeud courant
+    """
+
     dist = abs_v * dt
-    angle_diff = abs((child.theta - parent.theta + math.pi) % (2 * math.pi) - math.pi)
+    angle_diff = abs((child.theta - parent.theta + np.pi) % (2 * np.pi) - np.pi)
     cost = dist
 
     # Ajout des pénalités
@@ -354,26 +448,48 @@ def cost_motion(parent, child):
     return parent.g + cost
 
 
-def create_successors(node):
+def create_neighbor(node):
+    """Génère les voisins d'un noeud.
+    Input:
+    • node : noeud quelconque du graph
+    Output:
+    • sum(arc_len) : longueur du chemin de Dubins 
+    """
     successors = []
     for direction in [1, -1]:
-        for delta_deg in [-phi, 0, phi]:
-            delta = math.radians(delta_deg)
+        for delta in [-phi, 0, phi]:
             v = direction * abs_v
             x, y, theta = move_car(node.x, node.y, node.theta, v, delta, dt=dt)
-            Collision, img_out = collision_detector(display_img, dist_map, x, y, theta)
+            Collision, img_out = collision_detector(display_img, dist_map, x, y, theta, Show_Circle)
             if (0 <= x < map_shape[1] and 0 <= y < map_shape[0]) and Collision == False:
                 successors.append(Node3D(x, y, theta, parent=node, direction=direction))
     return successors
 
 
-def is_goal_reached(n, goal, pos_prec=position_precision, ang_prec=angular_precision):
-    dx, dy = n.x - goal.x, n.y - goal.y
-    dtheta = abs((n.theta - goal.theta + math.pi) % (2 * math.pi) - math.pi)
-    return math.hypot(dx, dy) < pos_prec and dtheta < ang_prec
+def is_goal_reached(current, goal, pos_prec=position_precision, ang_prec=angular_precision):
+    """Vérifie si la cible a été atteinte.
+    Input:
+    • current : noeud courant
+    • goal : noeud cible
+    • pos_prec : précision suivant x et y (plus ce coefficient est faible, plus on souhaite se rapprocher de la cible)
+    • ang_prec : précision angulaire (idem)
+    Output:
+    • (Bool): True si le goal est atteint
+    """
+
+    dx, dy = current.x - goal.x, current.y - goal.y
+    dtheta = abs((current.theta - goal.theta + np.pi) % (2 * np.pi) - np.pi)
+    return np.hypot(dx, dy) < pos_prec and dtheta < ang_prec
 
 
 def reconstruct_path(node):
+    """Reconstruit le chemin pour arriver à node.
+    Input:
+    • node : noeud
+    Output:
+    • path[::-1] : liste des noeuds menants à node 
+    """
+
     path = []
     while node:
         path.append((node.x, node.y, node.theta))
@@ -381,13 +497,21 @@ def reconstruct_path(node):
     return path[::-1]
 
 
-def hybrid_a_star(start, goal, dist_map, map_shape):
+def hybrid_a_star(start, goal):
+    """Calcule le chamin le plus du noeud de départ jusqu'au noeud d'arrivée.
+    Input:
+    • start : noeud de départ
+    • goal : noeud cible
+    Output:
+    • path : chemin le plus court entre start et goal
+    """
+
     open_list = []
     closed_set = set()
 
     start_node = Node3D(*start)
     goal_node = Node3D(*goal)
-    start_node.h = heuristic_dubins(start_node, goal_node)
+    start_node.h = heuristic_dubins(start_node, goal_node, rayon_min)
 
     heapq.heappush(open_list, start_node)
 
@@ -402,70 +526,73 @@ def hybrid_a_star(start, goal, dist_map, map_shape):
         if is_goal_reached(current, goal_node):
             return reconstruct_path(current)
 
-        for neighbor in create_successors(current):
+        for neighbor in create_neighbor(current):
             neighbor.g = cost_motion(current, neighbor)
-            neighbor.h = heuristic_dubins(neighbor, goal_node)
+            neighbor.h = heuristic_dubins(neighbor, goal_node, rayon_min)
             heapq.heappush(open_list, neighbor)
 
     return None
 
 
-
-
-
 ########################################## Affichage du path ##########################################
 
 
-
-
-
-def replay_path_on_map(map_img, delay, start, goal, dist_map, map_shape):
+def replay_path_on_map(map_img, delay, start, goal, dist_map):
+    """Affiche le déplacement de la voiture suivant le chemin le plus court sur la carte. 
+    Input:
+    • map_img : map ouverte avec OpenCV
+    • delay : temps de latence entre les frames
+    • start : noeud de départ
+    • goal : noeud cible
+    • dist_map : carte des distances
+    Output:
+    • Affiche la map
     """
-    Affiche la voiture qui suit un chemin donné (path).
-    - map_img : image de fond
-    - path : liste de tuples (x, y, theta)
-    - delay : délai entre les frames en millisecondes (default: 100 ms)
-    """
-
         
-    path = hybrid_a_star(start, goal, dist_map, map_shape)
+    path = hybrid_a_star(start, goal)
 
-    print(path)
+    trace_img = map_img.copy()
 
+    for i in range(len(path)):
+        x, y, theta = path[i]
 
+        if Show_Trace == True:
 
-    for (x, y, theta) in path:
+            # Calcule une couleur en fonction de la progression
+            alpha = i / len(path)
+            blue_intensity = int(220 * (1 - alpha))          # diminue au fil du temps
+            color = (220, blue_intensity, blue_intensity)    # dégradé vers le bleu clair
 
-        # Bloc d'affichage
-        display_img = draw_car(map_img, x, y, theta)
-        Collision, img_out = collision_detector(display_img, dist_map, x, y, theta)
-        cv2.imshow('Replay Car Path', img_out)
+            trace_img = draw_car(trace_img, x, y, theta, color=color)
 
-        key = cv2.waitKey(delay)
-        if key == 27:  # ÉCHAP pour arrêter
+        display_img = draw_car(trace_img, x, y, theta, main_color)  # voiture actuelle 
+        Collision, img_out = collision_detector(display_img, dist_map, x, y, theta, Show_Circle)
+
+        cv2.imshow('Trajectoire de la voiture', img_out)
+        if cv2.waitKey(delay) == 27:
             break
+
+    
 
     # Garde la dernière image affichée jusqu’à appui sur une touche
     cv2.waitKey(0)
     cv2.destroyAllWindows()
 
 
-
-
 ########################################## Preprocessing ##########################################
 
 # Générer la carte de distance
 dist_map = generate_obstacle_distance_map(map_img)
-display_img = draw_car(map_img, x, y, theta)
+display_img = draw_car(map_img, x, y, theta, main_color)
 
 print(type(dist_map))
 
 
-
+########################################## Affichage ##########################################
 
 
 if Control == True:
     Control_Mode(x, y, theta)
 
 if Control == False:
-    replay_path_on_map(map_img, delay, start, goal, dist_map, map_shape)
+    replay_path_on_map(map_img, delay, start, goal, dist_map)
